@@ -11,17 +11,43 @@ async function askFalAI(messages: { role: string; content: string }[]): Promise<
     return 'API key fal.ai belum dikonfigurasi. Tambahkan `VITE_FAL_API_KEY` ke file `.env` untuk mengaktifkan fitur AI.';
   }
   try {
+    const systemMsg = messages.find((m) => m.role === 'system')?.content || '';
+    const chatHistory = messages.filter((m) => m.role !== 'system');
+
+    // Format conversation history for prompt
+    let promptText = '';
+    if (chatHistory.length === 1) {
+      promptText = chatHistory[0].content;
+    } else {
+      promptText = chatHistory
+        .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+        .join('\n\n') + '\n\nAssistant:';
+    }
+
     const res = await fetch('https://fal.run/fal-ai/any-llm', {
       method: 'POST',
-      headers: { Authorization: `Key ${FAL_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'google/gemini-flash-1-5', messages, max_tokens: 600 }),
+      headers: {
+        Authorization: `Key ${FAL_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'google/gemini-flash-1.5',
+        prompt: promptText,
+        system_prompt: systemMsg,
+        max_tokens: 800,
+      }),
     });
-    if (!res.ok) throw new Error(await res.text());
+
+    if (!res.ok) {
+      const errBody = await res.text();
+      console.error('Fal.ai API error:', errBody);
+      throw new Error(errBody);
+    }
     const data = await res.json();
     return data.output || data.choices?.[0]?.message?.content || 'Maaf, tidak ada respons.';
   } catch (err) {
-    console.error(err);
-    return 'Terjadi kesalahan. Coba lagi beberapa saat.';
+    console.error('AI Error:', err);
+    return 'Terjadi kesalahan saat memproses pertanyaan. Silakan coba lagi.';
   }
 }
 
