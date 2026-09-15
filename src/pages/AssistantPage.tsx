@@ -7,9 +7,6 @@ import { Bot, Send, User, Sparkles } from 'lucide-react';
 const FAL_API_KEY = import.meta.env.VITE_FAL_API_KEY || '';
 
 async function askFalAI(messages: { role: string; content: string }[]): Promise<string> {
-  if (!FAL_API_KEY) {
-    return 'API key fal.ai belum dikonfigurasi. Tambahkan `VITE_FAL_API_KEY` ke file `.env` untuk mengaktifkan fitur AI.';
-  }
   try {
     const systemMsg = messages.find((m) => m.role === 'system')?.content || '';
     const chatHistory = messages.filter((m) => m.role !== 'system');
@@ -24,19 +21,33 @@ async function askFalAI(messages: { role: string; content: string }[]): Promise<
         .join('\n\n') + '\n\nAssistant:';
     }
 
-    const res = await fetch('https://fal.run/fal-ai/any-llm', {
-      method: 'POST',
-      headers: {
-        Authorization: `Key ${FAL_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'google/gemini-flash-1.5',
-        prompt: promptText,
-        system_prompt: systemMsg,
-        max_tokens: 800,
-      }),
-    });
+    const payload = {
+      model: 'google/gemini-flash-1.5',
+      prompt: promptText,
+      system_prompt: systemMsg,
+      max_tokens: 800,
+    };
+
+    let res: Response;
+
+    // If client has VITE_FAL_API_KEY (e.g. local dev), call directly
+    if (FAL_API_KEY) {
+      res = await fetch('https://fal.run/fal-ai/any-llm', {
+        method: 'POST',
+        headers: {
+          Authorization: `Key ${FAL_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+    } else {
+      // On Vercel: call serverless proxy /api/chat (API key kept private on server)
+      res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    }
 
     if (!res.ok) {
       const errBody = await res.text();
