@@ -1,3 +1,7 @@
+declare const process: {
+  env: Record<string, string | undefined>;
+};
+
 export default async function handler(req: Request) {
   if (req.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'Method Not Allowed' }), {

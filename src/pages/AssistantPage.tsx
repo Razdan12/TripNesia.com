@@ -380,11 +380,7 @@ export default function AssistantPage() {
           </button>
         </div>
 
-        {!FAL_API_KEY && (
-          <p style={{ fontSize: 12, color: 'var(--warning)', textAlign: 'center', marginTop: 12 }}>
-            ⚠️ Tambahkan <code style={{ background: 'var(--bg-elevated)', padding: '1px 6px', borderRadius: 4 }}>VITE_FAL_API_KEY</code> di file <code style={{ background: 'var(--bg-elevated)', padding: '1px 6px', borderRadius: 4 }}>.env</code> untuk mengaktifkan AI Chat
-          </p>
-        )}
+        
       </div>
     </div>
   );

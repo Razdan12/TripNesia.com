@@ -36,7 +36,7 @@ export default function ExplorePage() {
   useEffect(() => {
     if (state.city && state.destinations.length === 0 && !state.loading) {
       dispatch({ type: 'SET_LOADING', payload: true });
-      fetchDestinations(state.cityLat, state.cityLon, state.budget)
+      fetchDestinations(state.cityLat, state.cityLon, state.budget, 20000, state.city)
         .then((d) => dispatch({ type: 'SET_DESTINATIONS', payload: d }))
         .catch(() => dispatch({ type: 'SET_ERROR', payload: 'Gagal memuat data destinasi.' }))
         .finally(() => dispatch({ type: 'SET_LOADING', payload: false }));

@@ -49,10 +49,9 @@ export default function SearchBar() {
       dispatch({ type: 'SET_BUDGET', payload: budget });
       dispatch({ type: 'CLEAR_SELECTED' });
       dispatch({ type: 'SET_LOADING', payload: true });
-      navigate('/explore');
-
-      const destinations = await fetchDestinations(geo.lat, geo.lon, budget);
+      const destinations = await fetchDestinations(geo.lat, geo.lon, budget, 20000, cityInput.trim());
       dispatch({ type: 'SET_DESTINATIONS', payload: destinations });
+      navigate('/explore');
     } catch {
       setError(state.lang === 'id' ? 'Terjadi kesalahan. Coba lagi.' : 'Something went wrong. Try again.');
     } finally {

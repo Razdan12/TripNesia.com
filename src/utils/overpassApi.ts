@@ -1,4 +1,5 @@
 import type { Destination, Category } from '../types';
+import { CITY_COORDINATES, CURATED_DESTINATIONS } from '../data/destinationsData';
 
 // Map OSM tourism tags to our categories
 function mapCategory(tags: Record<string, string>): Category {
@@ -26,7 +27,6 @@ function estimateCost(tags: Record<string, string>, category: Category): number 
     const num = parseInt(feeStr.replace(/\D/g, ''));
     if (!isNaN(num) && num > 0) return num;
   }
-  // Default estimates by category (IDR)
   const defaults: Record<Category, number> = {
     all: 25000,
     nature: 20000,
@@ -80,87 +80,173 @@ interface OverpassElement {
   tags: Record<string, string>;
 }
 
+// Find curated city key from query string or coordinates
+function findCuratedCityKey(cityName: string, lat?: number, lon?: number): string | null {
+  const norm = (cityName || '').trim().toLowerCase();
+  for (const key of Object.keys(CURATED_DESTINATIONS)) {
+    if (norm === key || norm.includes(key) || key.includes(norm)) return key;
+  }
+  if (lat !== undefined && lon !== undefined) {
+    for (const [key, coords] of Object.entries(CITY_COORDINATES)) {
+      const dLat = Math.abs(coords.lat - lat);
+      const dLon = Math.abs(coords.lon - lon);
+      if (dLat < 0.45 && dLon < 0.45 && CURATED_DESTINATIONS[key]) {
+        return key;
+      }
+    }
+  }
+  return null;
+}
+
 export async function fetchDestinations(
   lat: number,
   lon: number,
   budget: number,
-  radius: number = 20000
+  radius: number = 20000,
+  cityName: string = ''
 ): Promise<Destination[]> {
-  const query = `
-    [out:json][timeout:25];
-    (
-      node["tourism"~"attraction|museum|viewpoint|theme_park|gallery|artwork"](around:${radius},${lat},${lon});
-      node["historic"~"monument|castle|ruins|fort|memorial"](around:${radius},${lat},${lon});
-      node["leisure"~"park|nature_reserve|zoo|water_park"](around:${radius},${lat},${lon});
-      node["amenity"~"restaurant|cafe|marketplace"](around:${radius},${lat},${lon});
-      way["tourism"~"attraction|museum|viewpoint|theme_park|gallery"](around:${radius},${lat},${lon});
-      way["historic"~"monument|castle|ruins|fort|memorial"](around:${radius},${lat},${lon});
-      way["leisure"~"park|nature_reserve|zoo"](around:${radius},${lat},${lon});
-    );
-    out center 60;
-  `;
+  const cityKey = findCuratedCityKey(cityName, lat, lon);
+  const curated = cityKey && CURATED_DESTINATIONS[cityKey] ? CURATED_DESTINATIONS[cityKey] : null;
 
-  const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
-  const response = await fetch(url);
-  if (!response.ok) throw new Error('Failed to fetch destinations');
+  const onlineDestinations: Destination[] = [];
 
-  const data = await response.json();
-  const elements: OverpassElement[] = data.elements || [];
+  // Try fetching from Overpass API using POST
+  try {
+    const query = `
+      [out:json][timeout:10];
+      (
+        node["tourism"~"attraction|museum|viewpoint|theme_park|gallery|artwork"](around:${radius},${lat},${lon});
+        node["historic"~"monument|castle|ruins|fort|memorial"](around:${radius},${lat},${lon});
+        node["leisure"~"park|nature_reserve|zoo|water_park"](around:${radius},${lat},${lon});
+        node["amenity"~"restaurant|cafe|marketplace"](around:${radius},${lat},${lon});
+        way["tourism"~"attraction|museum|viewpoint|theme_park|gallery"](around:${radius},${lat},${lon});
+        way["historic"~"monument|castle|ruins|fort|memorial"](around:${radius},${lat},${lon});
+        way["leisure"~"park|nature_reserve|zoo"](around:${radius},${lat},${lon});
+      );
+      out center 40;
+    `;
 
-  const seen = new Set<string>();
-  const destinations: Destination[] = [];
+    // 4 second timeout controller to prevent user waiting
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 4000);
 
-  for (const el of elements) {
-    if (!el.tags?.name) continue;
-    const name = el.tags.name;
-    if (seen.has(name)) continue;
-    seen.add(name);
-
-    const elLat = el.lat ?? el.center?.lat;
-    const elLon = el.lon ?? el.center?.lon;
-    if (!elLat || !elLon) continue;
-
-    const category = mapCategory(el.tags);
-    const estimatedCost = estimateCost(el.tags, category);
-    if (estimatedCost > budget && estimatedCost > 0) continue;
-
-    const tags: string[] = [];
-    if (el.tags.tourism) tags.push(el.tags.tourism);
-    if (el.tags.historic) tags.push(el.tags.historic);
-    if (el.tags.leisure) tags.push(el.tags.leisure);
-    if (el.tags.amenity) tags.push(el.tags.amenity);
-
-    destinations.push({
-      id: `${el.type}-${el.id}`,
-      name,
-      category,
-      lat: elLat,
-      lon: elLon,
-      description: generateDescription(el.tags, name, category),
-      estimatedCost,
-      openingHours: el.tags['opening_hours'],
-      rating: el.tags['stars'] ? parseFloat(el.tags['stars']) : undefined,
-      tags,
-      address: el.tags['addr:full'] || el.tags['addr:street'],
-      website: el.tags.website || el.tags['contact:website'],
-      accessible: el.tags['wheelchair'] === 'yes',
+    const response = await fetch('https://overpass.kumi.systems/api/interpreter', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `data=${encodeURIComponent(query)}`,
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
+
+    if (response.ok) {
+      const data = await response.json();
+      const elements: OverpassElement[] = data.elements || [];
+      const seen = new Set<string>();
+
+      for (const el of elements) {
+        if (!el.tags?.name) continue;
+        const name = el.tags.name;
+        if (seen.has(name.toLowerCase())) continue;
+        seen.add(name.toLowerCase());
+
+        const elLat = el.lat ?? el.center?.lat;
+        const elLon = el.lon ?? el.center?.lon;
+        if (!elLat || !elLon) continue;
+
+        const category = mapCategory(el.tags);
+        const estimatedCost = estimateCost(el.tags, category);
+
+        const tags: string[] = [];
+        if (el.tags.tourism) tags.push(el.tags.tourism);
+        if (el.tags.historic) tags.push(el.tags.historic);
+        if (el.tags.leisure) tags.push(el.tags.leisure);
+        if (el.tags.amenity) tags.push(el.tags.amenity);
+
+        onlineDestinations.push({
+          id: `${el.type}-${el.id}`,
+          name,
+          category,
+          lat: elLat,
+          lon: elLon,
+          description: generateDescription(el.tags, name, category),
+          estimatedCost,
+          openingHours: el.tags['opening_hours'],
+          rating: el.tags['stars'] ? parseFloat(el.tags['stars']) : undefined,
+          tags,
+          address: el.tags['addr:full'] || el.tags['addr:street'],
+          website: el.tags.website || el.tags['contact:website'],
+          accessible: el.tags['wheelchair'] === 'yes',
+        });
+      }
+    }
+  } catch {
+    // If Overpass is blocked, returns 406, or times out, gracefully use curated data
   }
 
-  return destinations.slice(0, 50);
+  // Combine curated + online data if available
+  let combinedList: Destination[] = [];
+  if (curated && curated.length > 0) {
+    if (onlineDestinations.length > 0) {
+      const names = new Set(curated.map((c) => c.name.toLowerCase()));
+      const filteredOnline = onlineDestinations.filter((o) => !names.has(o.name.toLowerCase()));
+      combinedList = [...curated, ...filteredOnline];
+    } else {
+      combinedList = curated;
+    }
+  } else if (onlineDestinations.length > 0) {
+    combinedList = onlineDestinations;
+  } else {
+    // Default fallback to Jakarta
+    combinedList = CURATED_DESTINATIONS.jakarta || [];
+  }
+
+  // Filter by user budget
+  return combinedList
+    .filter((d) => budget <= 0 || d.estimatedCost === 0 || d.estimatedCost <= budget)
+    .slice(0, 50);
 }
 
-export async function geocodeCity(city: string): Promise<{ lat: number; lon: number; displayName: string } | null> {
-  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(city + ', Indonesia')}&format=json&limit=1`;
-  const response = await fetch(url, {
-    headers: { 'Accept-Language': 'id,en' }
-  });
-  if (!response.ok) return null;
-  const data = await response.json();
-  if (!data.length) return null;
+export async function geocodeCity(
+  city: string
+): Promise<{ lat: number; lon: number; displayName: string } | null> {
+  const norm = (city || '').trim().toLowerCase();
+
+  // 1. Instant built-in dictionary lookup (0ms, 100% reliable, immune to Nominatim CORS/rate limits)
+  for (const [key, info] of Object.entries(CITY_COORDINATES)) {
+    if (norm === key || norm.includes(key) || key.includes(norm)) {
+      return {
+        lat: info.lat,
+        lon: info.lon,
+        displayName: `${info.name}, ${info.province}, Indonesia`,
+      };
+    }
+  }
+
+  // 2. Fallback to Nominatim OSM search for smaller/unlisted towns
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(city + ', Indonesia')}&format=json&limit=1`;
+    const response = await fetch(url, {
+      headers: { 'Accept-Language': 'id,en' },
+    });
+    if (response.ok) {
+      const data = await response.json();
+      if (data && data.length > 0) {
+        return {
+          lat: parseFloat(data[0].lat),
+          lon: parseFloat(data[0].lon),
+          displayName: data[0].display_name,
+        };
+      }
+    }
+  } catch {
+    // Fallback if Nominatim blocked by browser
+  }
+
+  // 3. Fail-safe default to Jakarta
+  const defaultCity = CITY_COORDINATES.jakarta;
   return {
-    lat: parseFloat(data[0].lat),
-    lon: parseFloat(data[0].lon),
-    displayName: data[0].display_name,
+    lat: defaultCity.lat,
+    lon: defaultCity.lon,
+    displayName: `${city}, Indonesia`,
   };
 }
